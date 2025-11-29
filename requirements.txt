@@ -1,0 +1,5 @@
+Flask>=2.0
+twilio>=8.0
+gunicorn>=20.0
+python-dotenv>=1.0
+requests>=2.0

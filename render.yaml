@@ -6,8 +6,10 @@ services:
     branch: main
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app_new:app
+    startCommand: gunicorn app:app
     envVars:
+      - key: BASE_URL
+        value: ""
       - key: CALL_PROVIDER
         value: "twilio"
     secrets: []

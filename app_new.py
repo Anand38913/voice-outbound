@@ -26,16 +26,6 @@ YOUR_PHONE_NUMBER = os.environ.get("YOUR_PHONE_NUMBER", "+917995465001")
 REPLIES_DIR = os.path.join(os.getcwd(), "replies")
 os.makedirs(REPLIES_DIR, exist_ok=True)
 
-# Store user language preference (in production, use a database)
-user_language = {}
-
-# Language options
-LANGUAGES = {
-    "1": {"code": "en", "name": "English"},
-    "2": {"code": "hi", "name": "Hindi"},
-    "3": {"code": "te", "name": "Telugu"}
-}
-
 # Hyderabad Electricity Board Information
 HYDERABAD_EB_INFO = {
     "board_name": "TGSPDCL - Telangana Southern Power Distribution Company Limited",
@@ -102,18 +92,13 @@ def sarvam_stt(audio_path: str) -> str:
     return data.get("text") or data.get("transcript") or ""
 
 
-def sarvam_tts(text: str, language: str = "en") -> str:
+def sarvam_tts(text: str) -> str:
     """Send text to Sarvam TTS and return path to generated MP3 file."""
     if not (SARVAM_API_KEY and SARVAM_TTS_URL):
         raise RuntimeError("Sarvam TTS not configured (SARVAM_API_KEY/SARVAM_TTS_URL)")
 
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}", "Content-Type": "application/json"}
     payload = {"text": text, "format": "mp3"}
-    
-    # Add language if supported by Sarvam API
-    if language in ["en", "hi", "te"]:
-        payload["language"] = language
-    
     resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, stream=True, timeout=60)
     resp.raise_for_status()
 
@@ -126,90 +111,50 @@ def sarvam_tts(text: str, language: str = "en") -> str:
     return path
 
 
-def get_language_selection_text() -> str:
-    """Generate language selection prompt."""
-    return "Welcome to Hyderabad Electricity Board. Press 1 for English, Press 2 for Hindi, Press 3 for Telugu."
-
-
-def get_eb_info_text(language: str = "en") -> str:
-    """Generate text with Hyderabad EB information in selected language."""
+def get_eb_info_text() -> str:
+    """Generate text with Hyderabad EB information."""
     info = HYDERABAD_EB_INFO
-    
-    if language == "hi":  # Hindi
-        text = f"{info['board_name']} में आपका स्वागत है। "
-        text += f"हमारा ग्राहक सेवा नंबर {info['customer_care']} है। "
-        text += f"टोल-फ्री हेल्पलाइन {info['toll_free']} है। "
-        text += f"हमारी वेबसाइट {info['website']} पर जाएं। "
-        text += "कृपया बताएं कि आपको किस सेवा के बारे में जानकारी चाहिए।"
-    elif language == "te":  # Telugu
-        text = f"{info['board_name']} కు స్వాగతం। "
-        text += f"మా కస్టమర్ కేర్ నంబర్ {info['customer_care']}। "
-        text += f"టోల్-ఫ్రీ హెల్ప్‌లైన్ {info['toll_free']}। "
-        text += f"మా వెబ్‌సైట్ {info['website']} ను సందర్శించండి। "
-        text += "దయచేసి మీకు ఏ సేవ గురించి సమాచారం కావాలో చెప్పండి।"
-    else:  # English (default)
-        text = f"Welcome to {info['board_name']}. "
-        text += f"Our customer care number is {info['customer_care']}. "
-        text += f"Toll-free helpline is {info['toll_free']}. "
-        text += f"Visit our website at {info['website']}. "
-        text += "Please tell us which service you need information about."
-    
+    text = f"Welcome to {info['board_name']}. "
+    text += f"Our customer care number is {info['customer_care']}. "
+    text += f"Toll-free helpline is {info['toll_free']}. "
+    text += f"Visit our website at {info['website']}. "
+    text += "We provide services including: "
+    text += ", ".join(info['services'][:4]) + ". "
+    text += "Available schemes include: "
+    text += ", ".join(info['schemes'][:3]) + ". "
+    text += "Please tell us which service you need information about."
     return text
 
 
-def process_user_query(user_text: str, language: str = "en") -> str:
-    """Process user query and provide relevant EB information in selected language."""
+def process_user_query(user_text: str) -> str:
+    """Process user query and provide relevant EB information."""
     user_text = (user_text or "").strip().lower()
-    info = HYDERABAD_EB_INFO
     
     if not user_text:
-        if language == "hi":
-            return "मैंने वह नहीं सुना। कृपया अपना प्रश्न दोहराएं।"
-        elif language == "te":
-            return "నేను అర్థం చేసుకోలేదు। దయచేసి మీ ప్రశ్నను మళ్లీ చెప్పండి।"
-        else:
-            return "I did not catch that. Please repeat your question."
+        return "I did not catch that. Please repeat your question about our services or schemes."
     
     # Keywords mapping to responses
-    if any(word in user_text for word in ["bill", "payment", "dues", "बिल", "भुगतान", "బిల్", "చెల్లింపు"]):
-        if language == "hi":
-            return f"बिल भुगतान और पूछताछ के लिए, कृपया {info['customer_care']} पर संपर्क करें या {info['website']} पर जाएं।"
-        elif language == "te":
-            return f"బిల్లు చెల్లింపు మరియు విచారణ కోసం, దయచేసి {info['customer_care']} కు సంప్రదించండి లేదా {info['website']} ను సందర్శించండి।"
-        else:
-            return f"For bill payment and inquiry, contact {info['customer_care']} or visit {info['website']}."
+    if any(word in user_text for word in ["bill", "payment", "dues"]):
+        return f"For bill payment and inquiry, please contact our customer care at {HYDERABAD_EB_INFO['customer_care']} or visit {HYDERABAD_EB_INFO['website']}. You can also use online payment options available on our website."
     
-    elif any(word in user_text for word in ["connection", "new", "apply", "कनेक्शन", "नया", "కనెక్షన్", "కొత్త"]):
-        if language == "hi":
-            return f"नए बिजली कनेक्शन के लिए, {info['toll_free']} पर कॉल करें। आपको पता प्रमाण, पहचान प्रमाण और संपत्ति दस्तावेज़ की आवश्यकता होगी।"
-        elif language == "te":
-            return f"కొత్త విద్యుత్ కనెక్షన్ కోసం, {info['toll_free']} కు కాల్ చేయండి। మీకు చిరునామా రుజువు, గుర్తింపు రుజువు మరియు ఆస్తి పత్రాలు అవసరం।"
-        else:
-            return f"For new electricity connection, call {info['toll_free']}. You'll need address proof, ID proof, and property documents."
+    elif any(word in user_text for word in ["connection", "new", "apply"]):
+        return f"To apply for a new electricity connection, visit our office or call {HYDERABAD_EB_INFO['toll_free']}. You will need to provide address proof, identity proof, and property documents."
     
-    elif any(word in user_text for word in ["solar", "rooftop", "renewable", "सौर", "छत", "సౌర", "పైకప్పు"]):
-        if language == "hi":
-            return f"हम छत पर सौर स्थापना के लिए नेट मीटरिंग प्रदान करते हैं। {info['customer_care']} पर कॉल करें।"
-        elif language == "te":
-            return f"మేము రూఫ్‌టాప్ సోలార్ ఇన్‌స్టాలేషన్‌ల కోసం నెట్ మీటరింగ్ అందిస్తాము। {info['customer_care']} కు కాల్ చేయండి।"
-        else:
-            return f"We offer net metering for rooftop solar. Call {info['customer_care']} to apply."
+    elif any(word in user_text for word in ["solar", "rooftop", "renewable"]):
+        return f"We offer net metering for rooftop solar installations. This allows you to generate your own electricity and sell surplus power to the grid. Call {HYDERABAD_EB_INFO['customer_care']} to apply for net metering."
     
-    elif any(word in user_text for word in ["complaint", "grievance", "issue", "problem", "शिकायत", "समस्या", "ఫిర్యాదు", "సమస్య"]):
-        if language == "hi":
-            return f"शिकायत दर्ज करने के लिए {info['toll_free']} पर कॉल करें या {info['website']} पर जाएं।"
-        elif language == "te":
-            return f"ఫిర్యాదు నమోదు చేయడానికి {info['toll_free']} కు కాల్ చేయండి లేదా {info['website']} ను సందర్శించండి।"
-        else:
-            return f"To file a complaint, call {info['toll_free']} or visit {info['website']}."
+    elif any(word in user_text for word in ["subsidy", "free", "scheme", "saubhagya"]):
+        schemes = "; ".join(HYDERABAD_EB_INFO['schemes'])
+        return f"We offer various schemes: {schemes}. Contact our office for eligibility and application details."
+    
+    elif any(word in user_text for word in ["complaint", "grievance", "issue", "problem"]):
+        return f"You can file a complaint by calling {HYDERABAD_EB_INFO['toll_free']} or visiting {HYDERABAD_EB_INFO['website']}. We aim to resolve issues within 7 days."
+    
+    elif any(word in user_text for word in ["meter", "reading", "consumption"]):
+        return "You can check your meter reading online on our website or call us for meter reading information. Smart metering is being rolled out across the city."
     
     else:
-        if language == "hi":
-            return f"अधिक जानकारी के लिए, {info['website']} पर जाएं या {info['toll_free']} पर कॉल करें।"
-        elif language == "te":
-            return f"మరింత సమాచారం కోసం, {info['website']} ను సందర్శించండి లేదా {info['toll_free']} కు కాల్ చేయండి।"
-        else:
-            return f"For more information, visit {info['website']} or call {info['toll_free']}."
+        return f"Thank you for your inquiry. For more information, please visit {HYDERABAD_EB_INFO['website']} or call our toll-free number {HYDERABAD_EB_INFO['toll_free']}."
 
 
 @app.route("/", methods=["GET"])
@@ -231,55 +176,16 @@ def initiate_call():
 
 @app.route("/twilio/voice", methods=["GET", "POST"])
 def twilio_voice():
-    """Initial TwiML: Ask for language selection."""
-    vr = VoiceResponse()
-    call_sid = request.values.get("CallSid")
-    
-    # Ask for language selection using Twilio Say
-    gather = vr.gather(num_digits=1, action=f"/twilio/language?CallSid={call_sid}", method="POST", timeout=5)
-    gather.say(get_language_selection_text(), language="en-IN")
-    
-    # If no input, default to English
-    vr.redirect(f"/twilio/language?CallSid={call_sid}&Digits=1")
-    
-    return str(vr), 200, {"Content-Type": "application/xml"}
-
-
-@app.route("/twilio/language", methods=["POST"])
-def twilio_language():
-    """Handle language selection and provide EB info."""
-    call_sid = request.values.get("CallSid")
-    digits = request.values.get("Digits", "1")  # Default to English
-    
-    # Map digit to language
-    language_map = {"1": "en", "2": "hi", "3": "te"}
-    language = language_map.get(digits, "en")
-    
-    # Store language preference for this call
-    user_language[call_sid] = language
-    
+    """Initial TwiML: greet and ask about Hyderabad EB, then record response."""
     vr = VoiceResponse()
     
-    # Provide EB information in selected language using Twilio Say
-    greeting = get_eb_info_text(language)
+    # Generate greeting with EB info
+    greeting = get_eb_info_text()
+    vr.say(greeting)
     
-    # Map language to Twilio language codes
-    twilio_lang_map = {"en": "en-IN", "hi": "hi-IN", "te": "en-IN"}  # Telugu falls back to English
-    twilio_lang = twilio_lang_map.get(language, "en-IN")
-    
-    vr.say(greeting, language=twilio_lang)
-    
-    # Record user's query
-    vr.record(action=f"/twilio/recording?CallSid={call_sid}", method="POST", max_length=60, play_beep=True)
-    
-    # No response message
-    if language == "hi":
-        vr.say("कोई प्रतिक्रिया नहीं मिली। कॉल करने के लिए धन्यवाद।", language="hi-IN")
-    elif language == "te":
-        vr.say("No response received. Thank you for calling.", language="en-IN")
-    else:
-        vr.say("No response received. Thank you for calling.", language="en-IN")
-    
+    # Record user's response
+    vr.record(action="/twilio/recording", method="POST", max_length=60, play_beep=True)
+    vr.say("No response received. Thank you for calling.")
     vr.hangup()
     
     return str(vr), 200, {"Content-Type": "application/xml"}
@@ -289,19 +195,9 @@ def twilio_language():
 def twilio_recording():
     """Handle recording: transcribe, process, generate response, and callback."""
     recording_url = request.form.get("RecordingUrl") or request.values.get("RecordingUrl")
-    call_sid = request.values.get("CallSid")
-    
-    # Get language preference for this call
-    language = user_language.get(call_sid, "en")
-    
     if not recording_url:
         vr = VoiceResponse()
-        if language == "hi":
-            vr.say("कोई रिकॉर्डिंग नहीं मिली। कॉल करने के लिए धन्यवाद।", language="hi-IN")
-        elif language == "te":
-            vr.say("రికార్డింగ్ రాలేదు। కాల్ చేసినందుకు ధన్యవాదాలు।", language="te-IN")
-        else:
-            vr.say("No recording received. Thank you for calling.", language="en-IN")
+        vr.say("No recording received. Thank you for calling.")
         vr.hangup()
         return str(vr), 200, {"Content-Type": "application/xml"}
 
@@ -310,49 +206,28 @@ def twilio_recording():
         audio_path = download_twilio_recording(recording_url)
         user_text = sarvam_stt(audio_path)
 
-        # Process query and generate response in selected language
-        reply_text = process_user_query(user_text, language)
+        # Process query and generate response
+        reply_text = process_user_query(user_text)
 
-        # Return TwiML with response using Twilio Say
+        # Generate audio response
+        reply_audio_path = sarvam_tts(reply_text)
+        filename = os.path.basename(reply_audio_path)
+        audio_url = f"{BASE_URL}/replies/{filename}"
+
+        # Return TwiML to play response and ask for more info
         vr = VoiceResponse()
-        
-        # Map language to Twilio language codes
-        twilio_lang_map = {"en": "en-IN", "hi": "hi-IN", "te": "en-IN"}
-        twilio_lang = twilio_lang_map.get(language, "en-IN")
-        
-        vr.say(reply_text, language=twilio_lang)
-        
-        # Closing message in selected language
-        if language == "hi":
-            vr.say("हैदराबाद इलेक्ट्रिसिटी बोर्ड सेवाओं का उपयोग करने के लिए धन्यवाद। अलविदा।", language="hi-IN")
-        elif language == "te":
-            vr.say("Thank you for using Hyderabad Electricity Board services. Goodbye.", language="en-IN")
-        else:
-            vr.say("Thank you for using Hyderabad Electricity Board services. Goodbye.", language="en-IN")
-        
+        vr.play(audio_url)
+        vr.say("For more information, please visit our website or call the toll-free number provided.")
+        vr.say("Thank you for using Hyderabad Electricity Board services. Goodbye.")
         vr.hangup()
-        
-        # Clean up language preference
-        if call_sid in user_language:
-            del user_language[call_sid]
         
         return str(vr), 200, {"Content-Type": "application/xml"}
 
     except Exception as e:
         print(f"Error: {str(e)}")
         vr = VoiceResponse()
-        if language == "hi":
-            vr.say("क्षमा करें, एक त्रुटि हुई। कॉल करने के लिए धन्यवाद।", language="hi-IN")
-        elif language == "te":
-            vr.say("క్షమించండి, లోపం సంభవించింది। కాల్ చేసినందుకు ధన్యవాదాలు।", language="te-IN")
-        else:
-            vr.say("Sorry, an error occurred. Thank you for calling.", language="en-IN")
+        vr.say("Sorry, an error occurred. Thank you for calling.")
         vr.hangup()
-        
-        # Clean up language preference
-        if call_sid in user_language:
-            del user_language[call_sid]
-        
         return str(vr), 200, {"Content-Type": "application/xml"}
 
 

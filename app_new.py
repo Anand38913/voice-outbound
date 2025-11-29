@@ -102,43 +102,18 @@ def sarvam_stt(audio_path: str) -> str:
     return data.get("text") or data.get("transcript") or ""
 
 
-def sarvam_tts(text: str, language: str = "en-IN") -> str:
-    """Send text to Sarvam TTS and return path to generated MP3 file.
-    
-    Sarvam AI language codes:
-    - en-IN: English (India)
-    - hi-IN: Hindi
-    - te-IN: Telugu
-    - ta-IN: Tamil
-    - kn-IN: Kannada
-    - ml-IN: Malayalam
-    - mr-IN: Marathi
-    - bn-IN: Bengali
-    - gu-IN: Gujarati
-    """
+def sarvam_tts(text: str, language: str = "en") -> str:
+    """Send text to Sarvam TTS and return path to generated MP3 file."""
     if not (SARVAM_API_KEY and SARVAM_TTS_URL):
         raise RuntimeError("Sarvam TTS not configured (SARVAM_API_KEY/SARVAM_TTS_URL)")
 
-    # Map language codes to Sarvam format
-    lang_map = {
-        "en": "en-IN",
-        "hi": "hi-IN",
-        "te": "te-IN"
-    }
-    sarvam_lang = lang_map.get(language, language)
-
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "inputs": [text],
-        "target_language_code": sarvam_lang,
-        "speaker": "meera",  # Female voice
-        "pitch": 0,
-        "pace": 1.0,
-        "loudness": 1.5,
-        "speech_sample_rate": 8000,
-        "enable_preprocessing": True,
-        "model": "bulbul:v1"
-    }
+    payload = {"text": text, "format": "mp3"}
+    
+    # Add language if supported by Sarvam API
+    if language in ["en", "hi", "te"]:
+        payload["language"] = language
+    
     resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, stream=True, timeout=60)
     resp.raise_for_status()
 
@@ -151,12 +126,9 @@ def sarvam_tts(text: str, language: str = "en-IN") -> str:
     return path
 
 
-def get_language_selection_audio() -> str:
-    """Generate language selection prompt audio and return URL."""
-    text = "Welcome to Hyderabad Electricity Board. Press 1 for English, Press 2 for Hindi, Press 3 for Telugu."
-    audio_path = sarvam_tts(text, "en-IN")
-    filename = os.path.basename(audio_path)
-    return f"{BASE_URL}/replies/{filename}"
+def get_language_selection_text() -> str:
+    """Generate language selection prompt."""
+    return "Welcome to Hyderabad Electricity Board. Press 1 for English, Press 2 for Hindi, Press 3 for Telugu."
 
 
 def get_eb_info_text(language: str = "en") -> str:
@@ -263,20 +235,12 @@ def twilio_voice():
     vr = VoiceResponse()
     call_sid = request.values.get("CallSid")
     
-    try:
-        # Generate language selection audio
-        audio_url = get_language_selection_audio()
-        
-        # Ask for language selection
-        gather = vr.gather(num_digits=1, action=f"/twilio/language?CallSid={call_sid}", method="POST", timeout=5)
-        gather.play(audio_url)
-        
-        # If no input, default to English
-        vr.redirect(f"/twilio/language?CallSid={call_sid}&Digits=1")
-    except Exception as e:
-        print(f"Error in language selection: {str(e)}")
-        # Fallback to English
-        vr.redirect(f"/twilio/language?CallSid={call_sid}&Digits=1")
+    # Ask for language selection using Twilio Say
+    gather = vr.gather(num_digits=1, action=f"/twilio/language?CallSid={call_sid}", method="POST", timeout=5)
+    gather.say(get_language_selection_text(), language="en-IN")
+    
+    # If no input, default to English
+    vr.redirect(f"/twilio/language?CallSid={call_sid}&Digits=1")
     
     return str(vr), 200, {"Content-Type": "application/xml"}
 

@@ -102,16 +102,42 @@ def sarvam_stt(audio_path: str) -> str:
     return data.get("text") or data.get("transcript") or ""
 
 
-def sarvam_tts(text: str, language: str = "en") -> str:
-    """Send text to Sarvam TTS and return path to generated MP3 file."""
+def sarvam_tts(text: str, language: str = "en-IN") -> str:
+    """Send text to Sarvam TTS and return path to generated MP3 file.
+    
+    Sarvam AI language codes:
+    - en-IN: English (India)
+    - hi-IN: Hindi
+    - te-IN: Telugu
+    - ta-IN: Tamil
+    - kn-IN: Kannada
+    - ml-IN: Malayalam
+    - mr-IN: Marathi
+    - bn-IN: Bengali
+    - gu-IN: Gujarati
+    """
     if not (SARVAM_API_KEY and SARVAM_TTS_URL):
         raise RuntimeError("Sarvam TTS not configured (SARVAM_API_KEY/SARVAM_TTS_URL)")
 
+    # Map language codes to Sarvam format
+    lang_map = {
+        "en": "en-IN",
+        "hi": "hi-IN",
+        "te": "te-IN"
+    }
+    sarvam_lang = lang_map.get(language, language)
+
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}", "Content-Type": "application/json"}
     payload = {
-        "text": text, 
-        "format": "mp3",
-        "language": language  # Add language parameter
+        "inputs": [text],
+        "target_language_code": sarvam_lang,
+        "speaker": "meera",  # Female voice
+        "pitch": 0,
+        "pace": 1.0,
+        "loudness": 1.5,
+        "speech_sample_rate": 8000,
+        "enable_preprocessing": True,
+        "model": "bulbul:v1"
     }
     resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, stream=True, timeout=60)
     resp.raise_for_status()
@@ -125,9 +151,12 @@ def sarvam_tts(text: str, language: str = "en") -> str:
     return path
 
 
-def get_language_selection_text() -> str:
-    """Generate language selection prompt."""
-    return "Welcome to Hyderabad Electricity Board. Press 1 for English, Press 2 for Hindi, Press 3 for Telugu."
+def get_language_selection_audio() -> str:
+    """Generate language selection prompt audio and return URL."""
+    text = "Welcome to Hyderabad Electricity Board. Press 1 for English, Press 2 for Hindi, Press 3 for Telugu."
+    audio_path = sarvam_tts(text, "en-IN")
+    filename = os.path.basename(audio_path)
+    return f"{BASE_URL}/replies/{filename}"
 
 
 def get_eb_info_text(language: str = "en") -> str:
@@ -234,12 +263,20 @@ def twilio_voice():
     vr = VoiceResponse()
     call_sid = request.values.get("CallSid")
     
-    # Ask for language selection
-    gather = vr.gather(num_digits=1, action=f"/twilio/language?CallSid={call_sid}", method="POST", timeout=5)
-    gather.say(get_language_selection_text())
-    
-    # If no input, default to English
-    vr.redirect(f"/twilio/language?CallSid={call_sid}&Digits=1")
+    try:
+        # Generate language selection audio
+        audio_url = get_language_selection_audio()
+        
+        # Ask for language selection
+        gather = vr.gather(num_digits=1, action=f"/twilio/language?CallSid={call_sid}", method="POST", timeout=5)
+        gather.play(audio_url)
+        
+        # If no input, default to English
+        vr.redirect(f"/twilio/language?CallSid={call_sid}&Digits=1")
+    except Exception as e:
+        print(f"Error in language selection: {str(e)}")
+        # Fallback to English
+        vr.redirect(f"/twilio/language?CallSid={call_sid}&Digits=1")
     
     return str(vr), 200, {"Content-Type": "application/xml"}
 
@@ -259,19 +296,34 @@ def twilio_language():
     
     vr = VoiceResponse()
     
-    # Provide EB information in selected language
-    greeting = get_eb_info_text(language)
-    vr.say(greeting, language=language if language != "en" else "en-IN")
-    
-    # Record user's query
-    vr.record(action=f"/twilio/recording?CallSid={call_sid}", method="POST", max_length=60, play_beep=True)
-    
-    if language == "hi":
-        vr.say("कोई प्रतिक्रिया नहीं मिली। कॉल करने के लिए धन्यवाद।", language="hi-IN")
-    elif language == "te":
-        vr.say("ప్రతిస్పందన రాలేదు। కాల్ చేసినందుకు ధన్యవాదాలు।", language="te-IN")
-    else:
-        vr.say("No response received. Thank you for calling.", language="en-IN")
+    try:
+        # Provide EB information in selected language using Sarvam TTS
+        greeting = get_eb_info_text(language)
+        greeting_audio_path = sarvam_tts(greeting, language)
+        greeting_filename = os.path.basename(greeting_audio_path)
+        greeting_url = f"{BASE_URL}/replies/{greeting_filename}"
+        
+        vr.play(greeting_url)
+        
+        # Record user's query
+        vr.record(action=f"/twilio/recording?CallSid={call_sid}", method="POST", max_length=60, play_beep=True)
+        
+        # No response message
+        if language == "hi":
+            no_response = "कोई प्रतिक्रिया नहीं मिली। कॉल करने के लिए धन्यवाद।"
+        elif language == "te":
+            no_response = "ప్రతిస్పందన రాలేదు। కాల్ చేసినందుకు ధన్యవాదాలు।"
+        else:
+            no_response = "No response received. Thank you for calling."
+        
+        no_response_audio_path = sarvam_tts(no_response, language)
+        no_response_filename = os.path.basename(no_response_audio_path)
+        no_response_url = f"{BASE_URL}/replies/{no_response_filename}"
+        vr.play(no_response_url)
+        
+    except Exception as e:
+        print(f"Error in language handler: {str(e)}")
+        vr.say("Thank you for calling.", language="en-IN")
     
     vr.hangup()
     

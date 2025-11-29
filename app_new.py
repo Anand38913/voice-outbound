@@ -260,34 +260,25 @@ def twilio_language():
     
     vr = VoiceResponse()
     
-    try:
-        # Provide EB information in selected language using Sarvam TTS
-        greeting = get_eb_info_text(language)
-        greeting_audio_path = sarvam_tts(greeting, language)
-        greeting_filename = os.path.basename(greeting_audio_path)
-        greeting_url = f"{BASE_URL}/replies/{greeting_filename}"
-        
-        vr.play(greeting_url)
-        
-        # Record user's query
-        vr.record(action=f"/twilio/recording?CallSid={call_sid}", method="POST", max_length=60, play_beep=True)
-        
-        # No response message
-        if language == "hi":
-            no_response = "कोई प्रतिक्रिया नहीं मिली। कॉल करने के लिए धन्यवाद।"
-        elif language == "te":
-            no_response = "ప్రతిస్పందన రాలేదు। కాల్ చేసినందుకు ధన్యవాదాలు।"
-        else:
-            no_response = "No response received. Thank you for calling."
-        
-        no_response_audio_path = sarvam_tts(no_response, language)
-        no_response_filename = os.path.basename(no_response_audio_path)
-        no_response_url = f"{BASE_URL}/replies/{no_response_filename}"
-        vr.play(no_response_url)
-        
-    except Exception as e:
-        print(f"Error in language handler: {str(e)}")
-        vr.say("Thank you for calling.", language="en-IN")
+    # Provide EB information in selected language using Twilio Say
+    greeting = get_eb_info_text(language)
+    
+    # Map language to Twilio language codes
+    twilio_lang_map = {"en": "en-IN", "hi": "hi-IN", "te": "en-IN"}  # Telugu falls back to English
+    twilio_lang = twilio_lang_map.get(language, "en-IN")
+    
+    vr.say(greeting, language=twilio_lang)
+    
+    # Record user's query
+    vr.record(action=f"/twilio/recording?CallSid={call_sid}", method="POST", max_length=60, play_beep=True)
+    
+    # No response message
+    if language == "hi":
+        vr.say("कोई प्रतिक्रिया नहीं मिली। कॉल करने के लिए धन्यवाद।", language="hi-IN")
+    elif language == "te":
+        vr.say("No response received. Thank you for calling.", language="en-IN")
+    else:
+        vr.say("No response received. Thank you for calling.", language="en-IN")
     
     vr.hangup()
     
@@ -322,20 +313,20 @@ def twilio_recording():
         # Process query and generate response in selected language
         reply_text = process_user_query(user_text, language)
 
-        # Generate audio response in selected language
-        reply_audio_path = sarvam_tts(reply_text, language)
-        filename = os.path.basename(reply_audio_path)
-        audio_url = f"{BASE_URL}/replies/{filename}"
-
-        # Return TwiML to play response
+        # Return TwiML with response using Twilio Say
         vr = VoiceResponse()
-        vr.play(audio_url)
+        
+        # Map language to Twilio language codes
+        twilio_lang_map = {"en": "en-IN", "hi": "hi-IN", "te": "en-IN"}
+        twilio_lang = twilio_lang_map.get(language, "en-IN")
+        
+        vr.say(reply_text, language=twilio_lang)
         
         # Closing message in selected language
         if language == "hi":
             vr.say("हैदराबाद इलेक्ट्रिसिटी बोर्ड सेवाओं का उपयोग करने के लिए धन्यवाद। अलविदा।", language="hi-IN")
         elif language == "te":
-            vr.say("హైదరాబాద్ ఎలక్ట్రిసిటీ బోర్డ్ సేవలను ఉపయోగించినందుకు ధన్యవాదాలు। వీడ్కోలు।", language="te-IN")
+            vr.say("Thank you for using Hyderabad Electricity Board services. Goodbye.", language="en-IN")
         else:
             vr.say("Thank you for using Hyderabad Electricity Board services. Goodbye.", language="en-IN")
         

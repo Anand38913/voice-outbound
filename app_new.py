@@ -359,21 +359,19 @@ def twilio_language():
     
     print(f"[DEBUG] Language selected: {language} for call {call_sid}")
     
-    # Greet in selected language and ask for query
+        # Greet in selected language and ask for query
     lang_code = LANGUAGES[language]["code"]
-    
-    # Use Twilio's Say for all languages - it should handle Telugu with te-IN code
-    vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
-    
-    # Record user's query
-    vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
-    
-    # No input message
-    vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
-    
-    vr.redirect(f"{BASE_URL}/twilio/continue")
-    
-    return str(vr), 200, {"Content-Type": "application/xml"}
+
+    # If Telugu (or other unsupported by Twilio Say), generate TTS via Sarvam and Play it
+    if language == "te":
+        # generate audio file for greeting
+        greeting_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["greeting"], lang_code)
+        greeting_url = f"{BASE_URL}/replies/{os.path.basename(greeting_audio)}"
+        vr.play(greeting_url)
+    else:
+        # Use Twilio Say for supported languages (English/Hindi)
+        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+
 
 
 @app.route("/twilio/recording", methods=["POST"])

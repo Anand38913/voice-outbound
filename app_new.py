@@ -370,13 +370,13 @@ def twilio_language():
         vr.play(greeting_url)
     else:
         # Use Twilio Say for supported languages (English/Hindi)
-        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+        vr.play(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
     
     # Record user's query
     vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
     
     # No input message
-    vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+    vr.play(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
     vr.redirect(f"{BASE_URL}/twilio/continue")
     
     return str(vr), 200, {"Content-Type": "application/xml"}
@@ -397,7 +397,7 @@ def twilio_recording():
     vr = VoiceResponse()
     
     if not recording_url:
-        vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+        vr.play(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
         vr.redirect(f"{BASE_URL}/twilio/continue")
         return str(vr), 200, {"Content-Type": "application/xml"}
 
@@ -428,7 +428,7 @@ def twilio_recording():
 
     except Exception as e:
         print(f"Error: {str(e)}")
-        vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+        vr.play(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
         vr.redirect(f"{BASE_URL}/twilio/continue")
         return str(vr), 200, {"Content-Type": "application/xml"}
 
@@ -449,7 +449,7 @@ def twilio_continue():
     vr.append(gather)
     
     # If no input, end call
-    vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+    vr.play(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
     
     vr.hangup()
     
@@ -469,20 +469,20 @@ def twilio_action():
     
     if digits == "1":
         # Continue with another question
-        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+        vr.play(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
         vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
         vr.redirect(f"{BASE_URL}/twilio/continue")
     
     elif digits == "2":
         # Change language
         gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/language", method="POST", timeout=5)
-        gather.say(LANGUAGE_PROMPTS[language]["change_language"], language=lang_code)
+        gather.play(LANGUAGE_PROMPTS[language]["change_language"], language=lang_code)
         vr.append(gather)
         vr.redirect(f"{BASE_URL}/twilio/continue")
     
     elif digits == "3":
         # End call
-        vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+        vr.play(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
         vr.hangup()
         # Clean up call state
         if call_sid in call_states:

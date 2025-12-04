@@ -314,35 +314,14 @@ def twilio_language():
     # Greet in selected language and ask for query
     lang_code = LANGUAGES[language]["code"]
     
-    # For Telugu, use TTS instead of Twilio's Say to ensure proper pronunciation
-    if language == "te":
-        try:
-            greeting_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["greeting"], lang_code)
-            greeting_filename = os.path.basename(greeting_audio)
-            greeting_url = f"{BASE_URL}/replies/{greeting_filename}"
-            vr.play(greeting_url)
-        except Exception as e:
-            print(f"[ERROR] TTS failed for Telugu greeting: {e}")
-            # Fallback to English
-            vr.say("Welcome to TGSPDCL. How can I help you?", language="en-IN")
-    else:
-        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+    # Use Twilio's Say for all languages - it should handle Telugu with te-IN code
+    vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
     
     # Record user's query
     vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
     
     # No input message
-    if language == "te":
-        try:
-            no_input_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["no_input"], lang_code)
-            no_input_filename = os.path.basename(no_input_audio)
-            no_input_url = f"{BASE_URL}/replies/{no_input_filename}"
-            vr.play(no_input_url)
-        except Exception as e:
-            print(f"[ERROR] TTS failed for Telugu no_input: {e}")
-            vr.say("Please try again", language="en-IN")
-    else:
-        vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+    vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
     
     vr.redirect(f"{BASE_URL}/twilio/continue")
     
@@ -411,34 +390,11 @@ def twilio_continue():
     
     # Ask for next action
     gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/action", method="POST", timeout=5)
-    
-    # Use TTS for Telugu to ensure proper pronunciation
-    if language == "te":
-        try:
-            ask_more_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["ask_more"], lang_code)
-            ask_more_filename = os.path.basename(ask_more_audio)
-            ask_more_url = f"{BASE_URL}/replies/{ask_more_filename}"
-            gather.play(ask_more_url)
-        except Exception as e:
-            print(f"[ERROR] TTS failed for Telugu ask_more: {e}")
-            gather.say("Press 1 to continue, 2 to change language, or 3 to end call", language="en-IN")
-    else:
-        gather.say(LANGUAGE_PROMPTS[language]["ask_more"], language=lang_code)
-    
+    gather.say(LANGUAGE_PROMPTS[language]["ask_more"], language=lang_code)
     vr.append(gather)
     
     # If no input, end call
-    if language == "te":
-        try:
-            goodbye_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["goodbye"], lang_code)
-            goodbye_filename = os.path.basename(goodbye_audio)
-            goodbye_url = f"{BASE_URL}/replies/{goodbye_filename}"
-            vr.play(goodbye_url)
-        except Exception as e:
-            print(f"[ERROR] TTS failed for Telugu goodbye: {e}")
-            vr.say("Thank you for calling. Goodbye", language="en-IN")
-    else:
-        vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+    vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
     
     vr.hangup()
     
@@ -458,54 +414,20 @@ def twilio_action():
     
     if digits == "1":
         # Continue with another question
-        if language == "te":
-            try:
-                greeting_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["greeting"], lang_code)
-                greeting_filename = os.path.basename(greeting_audio)
-                greeting_url = f"{BASE_URL}/replies/{greeting_filename}"
-                vr.play(greeting_url)
-            except Exception as e:
-                print(f"[ERROR] TTS failed for Telugu greeting in action: {e}")
-                vr.say("How can I help you?", language="en-IN")
-        else:
-            vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
-        
+        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
         vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
         vr.redirect(f"{BASE_URL}/twilio/continue")
     
     elif digits == "2":
         # Change language
         gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/language", method="POST", timeout=5)
-        
-        if language == "te":
-            try:
-                change_lang_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["change_language"], lang_code)
-                change_lang_filename = os.path.basename(change_lang_audio)
-                change_lang_url = f"{BASE_URL}/replies/{change_lang_filename}"
-                gather.play(change_lang_url)
-            except Exception as e:
-                print(f"[ERROR] TTS failed for Telugu change_language: {e}")
-                gather.say("Press 1 for English, 2 for Hindi, 3 for Telugu", language="en-IN")
-        else:
-            gather.say(LANGUAGE_PROMPTS[language]["change_language"], language=lang_code)
-        
+        gather.say(LANGUAGE_PROMPTS[language]["change_language"], language=lang_code)
         vr.append(gather)
         vr.redirect(f"{BASE_URL}/twilio/continue")
     
     elif digits == "3":
         # End call
-        if language == "te":
-            try:
-                goodbye_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["goodbye"], lang_code)
-                goodbye_filename = os.path.basename(goodbye_audio)
-                goodbye_url = f"{BASE_URL}/replies/{goodbye_filename}"
-                vr.play(goodbye_url)
-            except Exception as e:
-                print(f"[ERROR] TTS failed for Telugu goodbye in action: {e}")
-                vr.say("Thank you for calling. Goodbye", language="en-IN")
-        else:
-            vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
-        
+        vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
         vr.hangup()
         # Clean up call state
         if call_sid in call_states:

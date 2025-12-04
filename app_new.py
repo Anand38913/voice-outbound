@@ -142,26 +142,47 @@ def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
     if not (SARVAM_API_KEY and SARVAM_TTS_URL):
         raise RuntimeError("Sarvam TTS not configured (SARVAM_API_KEY/SARVAM_TTS_URL)")
 
+    # Select appropriate model and speaker based on language
+    if language_code == "hi-IN":
+        model = "bulbul:v1"
+        speaker = ""
+    elif language_code == "te-IN":
+        model = "bulbul:v2"
+        speaker = ""
+    else:  # English
+        model = "bulbul:v1"
+        speaker = ""
+    
+    print(f"[DEBUG] TTS - Language: {language_code}, Model: {model}, Speaker: {speaker}, Text: {text[:100]}...")
+
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "text": text,
         "target_language_code": language_code,
-        "speaker": "meera" if language_code == "hi-IN" else "arvind",
+        "speaker": speaker,
         "pitch": 0,
         "pace": 1.0,
         "loudness": 1.5,
         "speech_sample_rate": 8000,
         "enable_preprocessing": True,
-        "model": "bulbul:v1"
+        "model": model
     }
-    resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, timeout=60)
-    resp.raise_for_status()
     
-    data = resp.json()
-    audio_base64 = data.get("audios", [None])[0]
-    
-    if not audio_base64:
-        raise RuntimeError("No audio returned from TTS")
+    try:
+        resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        
+        data = resp.json()
+        print(f"[DEBUG] TTS Response keys: {data.keys()}")
+        
+        audio_base64 = data.get("audios", [None])[0]
+        
+        if not audio_base64:
+            print(f"[ERROR] No audio in TTS response: {data}")
+            raise RuntimeError("No audio returned from TTS")
+    except requests.exceptions.HTTPError as e:
+        print(f"[ERROR] TTS API Error: {e.response.status_code} - {e.response.text}")
+        raise
     
     import base64
     audio_bytes = base64.b64decode(audio_base64)
@@ -288,13 +309,41 @@ def twilio_language():
     else:
         call_states[call_sid] = {"language": language, "interaction_count": 0}
     
+    print(f"[DEBUG] Language selected: {language} for call {call_sid}")
+    
     # Greet in selected language and ask for query
     lang_code = LANGUAGES[language]["code"]
-    vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+    
+    # For Telugu, use TTS instead of Twilio's Say to ensure proper pronunciation
+    if language == "te":
+        try:
+            greeting_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["greeting"], lang_code)
+            greeting_filename = os.path.basename(greeting_audio)
+            greeting_url = f"{BASE_URL}/replies/{greeting_filename}"
+            vr.play(greeting_url)
+        except Exception as e:
+            print(f"[ERROR] TTS failed for Telugu greeting: {e}")
+            # Fallback to English
+            vr.say("Welcome to TGSPDCL. How can I help you?", language="en-IN")
+    else:
+        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
     
     # Record user's query
     vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
-    vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+    
+    # No input message
+    if language == "te":
+        try:
+            no_input_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["no_input"], lang_code)
+            no_input_filename = os.path.basename(no_input_audio)
+            no_input_url = f"{BASE_URL}/replies/{no_input_filename}"
+            vr.play(no_input_url)
+        except Exception as e:
+            print(f"[ERROR] TTS failed for Telugu no_input: {e}")
+            vr.say("Please try again", language="en-IN")
+    else:
+        vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+    
     vr.redirect(f"{BASE_URL}/twilio/continue")
     
     return str(vr), 200, {"Content-Type": "application/xml"}
@@ -362,11 +411,35 @@ def twilio_continue():
     
     # Ask for next action
     gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/action", method="POST", timeout=5)
-    gather.say(LANGUAGE_PROMPTS[language]["ask_more"], language=lang_code)
+    
+    # Use TTS for Telugu to ensure proper pronunciation
+    if language == "te":
+        try:
+            ask_more_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["ask_more"], lang_code)
+            ask_more_filename = os.path.basename(ask_more_audio)
+            ask_more_url = f"{BASE_URL}/replies/{ask_more_filename}"
+            gather.play(ask_more_url)
+        except Exception as e:
+            print(f"[ERROR] TTS failed for Telugu ask_more: {e}")
+            gather.say("Press 1 to continue, 2 to change language, or 3 to end call", language="en-IN")
+    else:
+        gather.say(LANGUAGE_PROMPTS[language]["ask_more"], language=lang_code)
+    
     vr.append(gather)
     
     # If no input, end call
-    vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+    if language == "te":
+        try:
+            goodbye_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["goodbye"], lang_code)
+            goodbye_filename = os.path.basename(goodbye_audio)
+            goodbye_url = f"{BASE_URL}/replies/{goodbye_filename}"
+            vr.play(goodbye_url)
+        except Exception as e:
+            print(f"[ERROR] TTS failed for Telugu goodbye: {e}")
+            vr.say("Thank you for calling. Goodbye", language="en-IN")
+    else:
+        vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+    
     vr.hangup()
     
     return str(vr), 200, {"Content-Type": "application/xml"}
@@ -385,20 +458,54 @@ def twilio_action():
     
     if digits == "1":
         # Continue with another question
-        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+        if language == "te":
+            try:
+                greeting_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["greeting"], lang_code)
+                greeting_filename = os.path.basename(greeting_audio)
+                greeting_url = f"{BASE_URL}/replies/{greeting_filename}"
+                vr.play(greeting_url)
+            except Exception as e:
+                print(f"[ERROR] TTS failed for Telugu greeting in action: {e}")
+                vr.say("How can I help you?", language="en-IN")
+        else:
+            vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+        
         vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
         vr.redirect(f"{BASE_URL}/twilio/continue")
     
     elif digits == "2":
         # Change language
         gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/language", method="POST", timeout=5)
-        gather.say(LANGUAGE_PROMPTS[language]["change_language"], language=lang_code)
+        
+        if language == "te":
+            try:
+                change_lang_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["change_language"], lang_code)
+                change_lang_filename = os.path.basename(change_lang_audio)
+                change_lang_url = f"{BASE_URL}/replies/{change_lang_filename}"
+                gather.play(change_lang_url)
+            except Exception as e:
+                print(f"[ERROR] TTS failed for Telugu change_language: {e}")
+                gather.say("Press 1 for English, 2 for Hindi, 3 for Telugu", language="en-IN")
+        else:
+            gather.say(LANGUAGE_PROMPTS[language]["change_language"], language=lang_code)
+        
         vr.append(gather)
         vr.redirect(f"{BASE_URL}/twilio/continue")
     
     elif digits == "3":
         # End call
-        vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+        if language == "te":
+            try:
+                goodbye_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["goodbye"], lang_code)
+                goodbye_filename = os.path.basename(goodbye_audio)
+                goodbye_url = f"{BASE_URL}/replies/{goodbye_filename}"
+                vr.play(goodbye_url)
+            except Exception as e:
+                print(f"[ERROR] TTS failed for Telugu goodbye in action: {e}")
+                vr.say("Thank you for calling. Goodbye", language="en-IN")
+        else:
+            vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+        
         vr.hangup()
         # Clean up call state
         if call_sid in call_states:

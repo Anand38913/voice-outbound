@@ -1,15 +1,16 @@
 import os
 import uuid
 from typing import Optional
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, session
 from dotenv import load_dotenv
 import requests
 from twilio.rest import Client
-from twilio.twiml.voice_response import VoiceResponse
+from twilio.twiml.voice_response import VoiceResponse, Gather
 
 load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "your-secret-key-here")
 
 # Configuration
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
@@ -25,6 +26,43 @@ YOUR_PHONE_NUMBER = os.environ.get("YOUR_PHONE_NUMBER", "+917995465001")
 
 REPLIES_DIR = os.path.join(os.getcwd(), "replies")
 os.makedirs(REPLIES_DIR, exist_ok=True)
+
+# Store call state in memory (use Redis/database for production)
+call_states = {}
+
+# Language configurations
+LANGUAGES = {
+    "en": {"name": "English", "code": "en-IN"},
+    "hi": {"name": "Hindi", "code": "hi-IN"},
+    "te": {"name": "Telugu", "code": "te-IN"}
+}
+
+LANGUAGE_PROMPTS = {
+    "en": {
+        "welcome": "Welcome to TGSPDCL Telangana Southern Power Distribution. Press 1 for English, Press 2 for Hindi, Press 3 for Telugu.",
+        "greeting": "Welcome to TGSPDCL. Our customer care number is 040-23552222. Toll-free helpline is 1800-425-1912. How can I help you today?",
+        "ask_more": "Do you have any other questions? Press 1 to continue, Press 2 to change language, or Press 3 to end the call.",
+        "goodbye": "Thank you for calling TGSPDCL. Goodbye.",
+        "no_input": "I did not receive your input. Please try again.",
+        "change_language": "To change language, Press 1 for English, Press 2 for Hindi, Press 3 for Telugu."
+    },
+    "hi": {
+        "welcome": "TGSPDCL तेलंगाना दक्षिणी विद्युत वितरण में आपका स्वागत है। अंग्रेजी के लिए 1 दबाएं, हिंदी के लिए 2 दबाएं, तेलुगु के लिए 3 दबाएं।",
+        "greeting": "TGSPDCL में आपका स्वागत है। हमारा ग्राहक सेवा नंबर 040-23552222 है। टोल-फ्री हेल्पलाइन 1800-425-1912 है। मैं आज आपकी कैसे मदद कर सकता हूं?",
+        "ask_more": "क्या आपके कोई अन्य प्रश्न हैं? जारी रखने के लिए 1 दबाएं, भाषा बदलने के लिए 2 दबाएं, या कॉल समाप्त करने के लिए 3 दबाएं।",
+        "goodbye": "TGSPDCL को कॉल करने के लिए धन्यवाद। अलविदा।",
+        "no_input": "मुझे आपका इनपुट नहीं मिला। कृपया पुनः प्रयास करें।",
+        "change_language": "भाषा बदलने के लिए, अंग्रेजी के लिए 1 दबाएं, हिंदी के लिए 2 दबाएं, तेलुगु के लिए 3 दबाएं।"
+    },
+    "te": {
+        "welcome": "TGSPDCL తెలంగాణ దక్షిణ విద్యుత్ పంపిణీకి స్వాగతం। ఇంగ్లీష్ కోసం 1 నొక్కండి, హిందీ కోసం 2 నొక్కండి, తెలుగు కోసం 3 నొక్కండి।",
+        "greeting": "TGSPDCL కి స్వాగతం। మా కస్టమర్ కేర్ నంబర్ 040-23552222. టోల్-ఫ్రీ హెల్ప్‌లైన్ 1800-425-1912. నేను ఈరోజు మీకు ఎలా సహాయం చేయగలను?",
+        "ask_more": "మీకు ఇంకా ఏవైనా ప్రశ్నలు ఉన్నాయా? కొనసాగించడానికి 1 నొక్కండి, భాషను మార్చడానికి 2 నొక్కండి, లేదా కాల్ ముగించడానికి 3 నొక్కండి।",
+        "goodbye": "TGSPDCL కు కాల్ చేసినందుకు ధన్యవాదాలు। వీడ్కోలు।",
+        "no_input": "నాకు మీ ఇన్‌పుట్ అందలేదు। దయచేసి మళ్లీ ప్రయత్నించండి।",
+        "change_language": "భాషను మార్చడానికి, ఇంగ్లీష్ కోసం 1 నొక్కండి, హిందీ కోసం 2 నొక్కండి, తెలుగు కోసం 3 నొక్కండి।"
+    }
+}
 
 # Hyderabad Electricity Board Information
 HYDERABAD_EB_INFO = {
@@ -92,69 +130,89 @@ def sarvam_stt(audio_path: str) -> str:
     return data.get("text") or data.get("transcript") or ""
 
 
-def sarvam_tts(text: str) -> str:
+def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
     """Send text to Sarvam TTS and return path to generated MP3 file."""
     if not (SARVAM_API_KEY and SARVAM_TTS_URL):
         raise RuntimeError("Sarvam TTS not configured (SARVAM_API_KEY/SARVAM_TTS_URL)")
 
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}", "Content-Type": "application/json"}
-    payload = {"text": text, "format": "mp3"}
-    resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, stream=True, timeout=60)
+    payload = {
+        "text": text,
+        "target_language_code": language_code,
+        "speaker": "meera" if language_code == "hi-IN" else "arvind",
+        "pitch": 0,
+        "pace": 1.0,
+        "loudness": 1.5,
+        "speech_sample_rate": 8000,
+        "enable_preprocessing": True,
+        "model": "bulbul:v1"
+    }
+    resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, timeout=60)
     resp.raise_for_status()
-
-    filename = f"reply_{uuid.uuid4().hex}.mp3"
+    
+    data = resp.json()
+    audio_base64 = data.get("audios", [None])[0]
+    
+    if not audio_base64:
+        raise RuntimeError("No audio returned from TTS")
+    
+    import base64
+    audio_bytes = base64.b64decode(audio_base64)
+    
+    filename = f"reply_{uuid.uuid4().hex}.wav"
     path = os.path.join(REPLIES_DIR, filename)
     with open(path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            if chunk:
-                f.write(chunk)
+        f.write(audio_bytes)
     return path
 
 
-def get_eb_info_text() -> str:
-    """Generate text with Hyderabad EB information."""
-    info = HYDERABAD_EB_INFO
-    text = f"Welcome to {info['board_name']}. "
-    text += f"Our customer care number is {info['customer_care']}. "
-    text += f"Toll-free helpline is {info['toll_free']}. "
-    text += f"Visit our website at {info['website']}. "
-    text += "We provide services including: "
-    text += ", ".join(info['services'][:4]) + ". "
-    text += "Available schemes include: "
-    text += ", ".join(info['schemes'][:3]) + ". "
-    text += "Please tell us which service you need information about."
-    return text
-
-
-def process_user_query(user_text: str) -> str:
+def process_user_query(user_text: str, language: str = "en") -> str:
     """Process user query and provide relevant EB information."""
     user_text = (user_text or "").strip().lower()
     
     if not user_text:
-        return "I did not catch that. Please repeat your question about our services or schemes."
+        return LANGUAGE_PROMPTS[language]["no_input"]
     
     # Keywords mapping to responses
-    if any(word in user_text for word in ["bill", "payment", "dues"]):
-        return f"For bill payment and inquiry, please contact our customer care at {HYDERABAD_EB_INFO['customer_care']} or visit {HYDERABAD_EB_INFO['website']}. You can also use online payment options available on our website."
+    if any(word in user_text for word in ["bill", "payment", "dues", "बिल", "भुगतान", "బిల్", "చెల్లింపు"]):
+        if language == "hi":
+            return f"बिल भुगतान और पूछताछ के लिए, कृपया हमारे ग्राहक सेवा {HYDERABAD_EB_INFO['customer_care']} पर संपर्क करें या {HYDERABAD_EB_INFO['website']} पर जाएं। आप हमारी वेबसाइट पर ऑनलाइन भुगतान विकल्प भी उपयोग कर सकते हैं।"
+        elif language == "te":
+            return f"బిల్లు చెల్లింపు మరియు విచారణ కోసం, దయచేసి మా కస్టమర్ కేర్ {HYDERABAD_EB_INFO['customer_care']} ని సంప్రదించండి లేదా {HYDERABAD_EB_INFO['website']} ని సందర్శించండి। మీరు మా వెబ్‌సైట్‌లో ఆన్‌లైన్ చెల్లింపు ఎంపికలను కూడా ఉపయోగించవచ్చు।"
+        else:
+            return f"For bill payment and inquiry, please contact our customer care at {HYDERABAD_EB_INFO['customer_care']} or visit {HYDERABAD_EB_INFO['website']}. You can also use online payment options available on our website."
     
-    elif any(word in user_text for word in ["connection", "new", "apply"]):
-        return f"To apply for a new electricity connection, visit our office or call {HYDERABAD_EB_INFO['toll_free']}. You will need to provide address proof, identity proof, and property documents."
+    elif any(word in user_text for word in ["connection", "new", "apply", "कनेक्शन", "नया", "కనెక్షన్", "కొత్త"]):
+        if language == "hi":
+            return f"नए बिजली कनेक्शन के लिए आवेदन करने के लिए, हमारे कार्यालय में जाएं या {HYDERABAD_EB_INFO['toll_free']} पर कॉल करें। आपको पता प्रमाण, पहचान प्रमाण और संपत्ति दस्तावेज प्रदान करने होंगे।"
+        elif language == "te":
+            return f"కొత్త విద్యుత్ కనెక్షన్ కోసం దరఖాస్తు చేయడానికి, మా కార్యాలయాన్ని సందర్శించండి లేదా {HYDERABAD_EB_INFO['toll_free']} కు కాల్ చేయండి। మీరు చిరునామా రుజువు, గుర్తింపు రుజువు మరియు ఆస్తి పత్రాలను అందించాలి।"
+        else:
+            return f"To apply for a new electricity connection, visit our office or call {HYDERABAD_EB_INFO['toll_free']}. You will need to provide address proof, identity proof, and property documents."
     
-    elif any(word in user_text for word in ["solar", "rooftop", "renewable"]):
-        return f"We offer net metering for rooftop solar installations. This allows you to generate your own electricity and sell surplus power to the grid. Call {HYDERABAD_EB_INFO['customer_care']} to apply for net metering."
+    elif any(word in user_text for word in ["solar", "rooftop", "renewable", "सौर", "छत", "సౌర", "పైకప్పు"]):
+        if language == "hi":
+            return f"हम छत पर सौर प्रतिष्ठानों के लिए नेट मीटरिंग प्रदान करते हैं। यह आपको अपनी बिजली उत्पन्न करने और अधिशेष बिजली को ग्रिड में बेचने की अनुमति देता है। नेट मीटरिंग के लिए आवेदन करने के लिए {HYDERABAD_EB_INFO['customer_care']} पर कॉल करें।"
+        elif language == "te":
+            return f"మేము పైకప్పు సౌర సంస్థాపనల కోసం నెట్ మీటరింగ్‌ను అందిస్తాము। ఇది మీ స్వంత విద్యుత్‌ను ఉత్పత్తి చేయడానికి మరియు మిగులు విద్యుత్‌ను గ్రిడ్‌కు విక్రయించడానికి మిమ్మల్ని అనుమతిస్తుంది। నెట్ మీటరింగ్ కోసం దరఖాస్తు చేయడానికి {HYDERABAD_EB_INFO['customer_care']} కు కాల్ చేయండి।"
+        else:
+            return f"We offer net metering for rooftop solar installations. This allows you to generate your own electricity and sell surplus power to the grid. Call {HYDERABAD_EB_INFO['customer_care']} to apply for net metering."
     
-    elif any(word in user_text for word in ["subsidy", "free", "scheme", "saubhagya"]):
-        schemes = "; ".join(HYDERABAD_EB_INFO['schemes'])
-        return f"We offer various schemes: {schemes}. Contact our office for eligibility and application details."
-    
-    elif any(word in user_text for word in ["complaint", "grievance", "issue", "problem"]):
-        return f"You can file a complaint by calling {HYDERABAD_EB_INFO['toll_free']} or visiting {HYDERABAD_EB_INFO['website']}. We aim to resolve issues within 7 days."
-    
-    elif any(word in user_text for word in ["meter", "reading", "consumption"]):
-        return "You can check your meter reading online on our website or call us for meter reading information. Smart metering is being rolled out across the city."
+    elif any(word in user_text for word in ["complaint", "grievance", "issue", "problem", "शिकायत", "समस्या", "ఫిర్యాదు", "సమస్య"]):
+        if language == "hi":
+            return f"आप {HYDERABAD_EB_INFO['toll_free']} पर कॉल करके या {HYDERABAD_EB_INFO['website']} पर जाकर शिकायत दर्ज कर सकते हैं। हम 7 दिनों के भीतर समस्याओं को हल करने का लक्ष्य रखते हैं।"
+        elif language == "te":
+            return f"మీరు {HYDERABAD_EB_INFO['toll_free']} కు కాల్ చేయడం ద్వారా లేదా {HYDERABAD_EB_INFO['website']} ని సందర్శించడం ద్వారా ఫిర్యాదు దాఖలు చేయవచ్చు। మేము 7 రోజులలోపు సమస్యలను పరిష్కరించడానికి లక్ష్యంగా పెట్టుకున్నాము।"
+        else:
+            return f"You can file a complaint by calling {HYDERABAD_EB_INFO['toll_free']} or visiting {HYDERABAD_EB_INFO['website']}. We aim to resolve issues within 7 days."
     
     else:
-        return f"Thank you for your inquiry. For more information, please visit {HYDERABAD_EB_INFO['website']} or call our toll-free number {HYDERABAD_EB_INFO['toll_free']}."
+        if language == "hi":
+            return f"आपकी पूछताछ के लिए धन्यवाद। अधिक जानकारी के लिए, कृपया {HYDERABAD_EB_INFO['website']} पर जाएं या हमारे टोल-फ्री नंबर {HYDERABAD_EB_INFO['toll_free']} पर कॉल करें।"
+        elif language == "te":
+            return f"మీ విచారణకు ధన్యవాదాలు। మరింత సమాచారం కోసం, దయచేసి {HYDERABAD_EB_INFO['website']} ని సందర్శించండి లేదా మా టోల్-ఫ్రీ నంబర్ {HYDERABAD_EB_INFO['toll_free']} కు కాల్ చేయండి।"
+        else:
+            return f"Thank you for your inquiry. For more information, please visit {HYDERABAD_EB_INFO['website']} or call our toll-free number {HYDERABAD_EB_INFO['toll_free']}."
 
 
 @app.route("/", methods=["GET"])
@@ -176,29 +234,70 @@ def initiate_call():
 
 @app.route("/twilio/voice", methods=["GET", "POST"])
 def twilio_voice():
-    """Initial TwiML: greet and ask about Hyderabad EB, then record response."""
+    """Initial TwiML: Ask for language selection."""
+    call_sid = request.values.get("CallSid")
     vr = VoiceResponse()
     
-    # Generate greeting with EB info
-    greeting = get_eb_info_text()
-    vr.say(greeting)
+    # Initialize call state
+    call_states[call_sid] = {"language": None, "interaction_count": 0}
     
-    # Record user's response
-    vr.record(action="/twilio/recording", method="POST", max_length=60, play_beep=True)
-    vr.say("No response received. Thank you for calling.")
-    vr.hangup()
+    # Ask for language selection
+    gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/language", method="POST", timeout=5)
+    gather.say(LANGUAGE_PROMPTS["en"]["welcome"], language="en-IN")
+    vr.append(gather)
+    
+    # If no input, repeat
+    vr.redirect(f"{BASE_URL}/twilio/voice")
+    
+    return str(vr), 200, {"Content-Type": "application/xml"}
+
+
+@app.route("/twilio/language", methods=["POST"])
+def twilio_language():
+    """Handle language selection."""
+    call_sid = request.values.get("CallSid")
+    digits = request.values.get("Digits")
+    
+    vr = VoiceResponse()
+    
+    # Map digit to language
+    language_map = {"1": "en", "2": "hi", "3": "te"}
+    language = language_map.get(digits, "en")
+    
+    # Update call state
+    if call_sid in call_states:
+        call_states[call_sid]["language"] = language
+    else:
+        call_states[call_sid] = {"language": language, "interaction_count": 0}
+    
+    # Greet in selected language and ask for query
+    lang_code = LANGUAGES[language]["code"]
+    vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+    
+    # Record user's query
+    vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
+    vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+    vr.redirect(f"{BASE_URL}/twilio/continue")
     
     return str(vr), 200, {"Content-Type": "application/xml"}
 
 
 @app.route("/twilio/recording", methods=["POST"])
 def twilio_recording():
-    """Handle recording: transcribe, process, generate response, and callback."""
+    """Handle recording: transcribe, process, generate response, and ask for continuation."""
+    call_sid = request.values.get("CallSid")
     recording_url = request.form.get("RecordingUrl") or request.values.get("RecordingUrl")
+    
+    # Get call state
+    call_state = call_states.get(call_sid, {"language": "en", "interaction_count": 0})
+    language = call_state["language"]
+    lang_code = LANGUAGES[language]["code"]
+    
+    vr = VoiceResponse()
+    
     if not recording_url:
-        vr = VoiceResponse()
-        vr.say("No recording received. Thank you for calling.")
-        vr.hangup()
+        vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+        vr.redirect(f"{BASE_URL}/twilio/continue")
         return str(vr), 200, {"Content-Type": "application/xml"}
 
     try:
@@ -207,28 +306,91 @@ def twilio_recording():
         user_text = sarvam_stt(audio_path)
 
         # Process query and generate response
-        reply_text = process_user_query(user_text)
+        reply_text = process_user_query(user_text, language)
 
         # Generate audio response
-        reply_audio_path = sarvam_tts(reply_text)
+        reply_audio_path = sarvam_tts(reply_text, lang_code)
         filename = os.path.basename(reply_audio_path)
         audio_url = f"{BASE_URL}/replies/{filename}"
 
-        # Return TwiML to play response and ask for more info
-        vr = VoiceResponse()
+        # Play response
         vr.play(audio_url)
-        vr.say("For more information, please visit our website or call the toll-free number provided.")
-        vr.say("Thank you for using Hyderabad Electricity Board services. Goodbye.")
-        vr.hangup()
+        
+        # Update interaction count
+        call_state["interaction_count"] += 1
+        call_states[call_sid] = call_state
+        
+        # Ask if user wants to continue
+        vr.redirect(f"{BASE_URL}/twilio/continue")
         
         return str(vr), 200, {"Content-Type": "application/xml"}
 
     except Exception as e:
         print(f"Error: {str(e)}")
-        vr = VoiceResponse()
-        vr.say("Sorry, an error occurred. Thank you for calling.")
-        vr.hangup()
+        vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+        vr.redirect(f"{BASE_URL}/twilio/continue")
         return str(vr), 200, {"Content-Type": "application/xml"}
+
+
+@app.route("/twilio/continue", methods=["GET", "POST"])
+def twilio_continue():
+    """Ask if user wants to continue, change language, or end call."""
+    call_sid = request.values.get("CallSid")
+    call_state = call_states.get(call_sid, {"language": "en", "interaction_count": 0})
+    language = call_state["language"]
+    lang_code = LANGUAGES[language]["code"]
+    
+    vr = VoiceResponse()
+    
+    # Ask for next action
+    gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/action", method="POST", timeout=5)
+    gather.say(LANGUAGE_PROMPTS[language]["ask_more"], language=lang_code)
+    vr.append(gather)
+    
+    # If no input, end call
+    vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+    vr.hangup()
+    
+    return str(vr), 200, {"Content-Type": "application/xml"}
+
+
+@app.route("/twilio/action", methods=["POST"])
+def twilio_action():
+    """Handle user's choice to continue, change language, or end call."""
+    call_sid = request.values.get("CallSid")
+    digits = request.values.get("Digits")
+    call_state = call_states.get(call_sid, {"language": "en", "interaction_count": 0})
+    language = call_state["language"]
+    lang_code = LANGUAGES[language]["code"]
+    
+    vr = VoiceResponse()
+    
+    if digits == "1":
+        # Continue with another question
+        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+        vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
+        vr.redirect(f"{BASE_URL}/twilio/continue")
+    
+    elif digits == "2":
+        # Change language
+        gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/language", method="POST", timeout=5)
+        gather.say(LANGUAGE_PROMPTS[language]["change_language"], language=lang_code)
+        vr.append(gather)
+        vr.redirect(f"{BASE_URL}/twilio/continue")
+    
+    elif digits == "3":
+        # End call
+        vr.say(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
+        vr.hangup()
+        # Clean up call state
+        if call_sid in call_states:
+            del call_states[call_sid]
+    
+    else:
+        # Invalid input, ask again
+        vr.redirect(f"{BASE_URL}/twilio/continue")
+    
+    return str(vr), 200, {"Content-Type": "application/xml"}
 
 
 @app.route("/replies/<path:filename>")

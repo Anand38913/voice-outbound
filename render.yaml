@@ -6,10 +6,21 @@ services:
     branch: main
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn app_new:app
     envVars:
       - key: BASE_URL
-        value: ""
-      - key: CALL_PROVIDER
-        value: "twilio"
-    secrets: []
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: SARVAM_STT_URL
+        value: https://api.sarvam.ai/speech-to-text
+      - key: SARVAM_TTS_URL
+        value: https://api.sarvam.ai/text-to-speech
+      - key: YOUR_PHONE_NUMBER
+        sync: false

@@ -138,22 +138,24 @@ def sarvam_stt(audio_path: str, language_code: str = "en-IN") -> str:
 
 
 def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
-    """Send text to Sarvam TTS and return path to generated MP3 file."""
+    """Send text to Sarvam TTS and return path to generated audio file (wav/mp3).
+       This version is defensive: inspects response and chooses correct extension.
+    """
     if not (SARVAM_API_KEY and SARVAM_TTS_URL):
         raise RuntimeError("Sarvam TTS not configured (SARVAM_API_KEY/SARVAM_TTS_URL)")
 
-    # Select appropriate model and speaker based on language
+    # model selection (your mapping)
     if language_code == "hi-IN":
         model = "bulbul:v1"
         speaker = ""
     elif language_code == "te-IN":
         model = "bulbul:v2"
         speaker = ""
-    else:  # English
+    else:
         model = "bulbul:v1"
         speaker = ""
-    
-    print(f"[DEBUG] TTS - Language: {language_code}, Model: {model}, Speaker: {speaker}, Text: {text[:100]}...")
+
+    print(f"[DEBUG] TTS request - lang: {language_code}, model: {model}, speaker: {speaker}, text_len={len(text)}")
 
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -163,35 +165,81 @@ def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
         "pitch": 0,
         "pace": 1.0,
         "loudness": 1.5,
-        "speech_sample_rate": 8000,
+        "speech_sample_rate": 16000,
         "enable_preprocessing": True,
         "model": model
     }
-    
+
+    resp = None
     try:
         resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, timeout=60)
+        # Always log status and body for debugging
+        print(f"[DEBUG] Sarvam TTS status: {resp.status_code}")
+        print(f"[DEBUG] Sarvam TTS body: {resp.text[:2000]}")  # truncate to avoid huge logs
         resp.raise_for_status()
-        
         data = resp.json()
-        print(f"[DEBUG] TTS Response keys: {data.keys()}")
-        
-        audio_base64 = data.get("audios", [None])[0]
-        
-        if not audio_base64:
-            print(f"[ERROR] No audio in TTS response: {data}")
-            raise RuntimeError("No audio returned from TTS")
-    except requests.exceptions.HTTPError as e:
-        print(f"[ERROR] TTS API Error: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        # provide richer log for debugging
+        if resp is not None:
+            print("[ERROR] Sarvam TTS failed:", resp.status_code, resp.text)
         raise
-    
-    import base64
-    audio_bytes = base64.b64decode(audio_base64)
-    
-    filename = f"reply_{uuid.uuid4().hex}.wav"
+
+    # Try several common shapes:
+    audio_b64 = None
+    audio_mime = None
+
+    # Case A: audios is list of base64 strings or data URIs
+    audios = data.get("audios")
+    if audios:
+        first = audios[0]
+        if isinstance(first, dict):
+            # maybe {"audio": "...", "mime": "audio/wav"}
+            audio_b64 = first.get("audio") or first.get("data") or first.get("base64")
+            audio_mime = first.get("mime") or first.get("format")
+        elif isinstance(first, str):
+            # maybe "data:audio/wav;base64,AAA..."
+            if first.startswith("data:"):
+                # parse data URI
+                header, b64 = first.split(",", 1)
+                audio_b64 = b64
+                # header example: data:audio/wav;base64
+                if ";" in header:
+                    audio_mime = header.split(":")[1].split(";")[0]
+            else:
+                audio_b64 = first
+
+    # Case B: direct key 'audio' or 'audio_base64'
+    if not audio_b64:
+        for k in ("audio", "audio_base64", "base64_audio", "file"):
+            if k in data:
+                audio_b64 = data[k]
+                break
+
+    if not audio_b64:
+        print("[ERROR] No audio base64 found in TTS response. Full response:")
+        print(data)
+        raise RuntimeError("No audio returned from TTS")
+
+    # Determine extension
+    ext = ".wav"
+    if audio_mime:
+        ext = mimetypes.guess_extension(audio_mime) or ext
+    # If extension still None and base64 begins with MP3 magic after decode, fallback to .mp3
+    audio_bytes = base64.b64decode(audio_b64)
+    # Quick magic-byte detection:
+    if audio_bytes[:3] == b"ID3" or audio_bytes[:2] == b"\xff\xfb":
+        ext = ".mp3"
+    elif audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
+        ext = ".wav"
+
+    filename = f"reply_{uuid.uuid4().hex}{ext}"
     path = os.path.join(REPLIES_DIR, filename)
     with open(path, "wb") as f:
         f.write(audio_bytes)
+
+    print(f"[DEBUG] Wrote TTS file: {path} (ext={ext})")
     return path
+
 
 
 def process_user_query(user_text: str, language: str = "en") -> str:

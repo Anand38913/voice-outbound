@@ -116,15 +116,22 @@ def download_twilio_recording(recording_url: str) -> str:
     return path
 
 
-def sarvam_stt(audio_path: str) -> str:
+def sarvam_stt(audio_path: str, language_code: str = "en-IN") -> str:
     """Send audio file to Sarvam STT and return the transcribed text."""
     if not (SARVAM_API_KEY and SARVAM_STT_URL):
         raise RuntimeError("Sarvam STT not configured (SARVAM_API_KEY/SARVAM_STT_URL)")
 
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
+    
+    # Prepare the request with language code
+    data_payload = {
+        "language_code": language_code,
+        "model": "saaras:v1"
+    }
+    
     with open(audio_path, "rb") as fh:
         files = {"file": (os.path.basename(audio_path), fh, "audio/wav")}
-        resp = requests.post(SARVAM_STT_URL, headers=headers, files=files, timeout=60)
+        resp = requests.post(SARVAM_STT_URL, headers=headers, files=files, data=data_payload, timeout=60)
     resp.raise_for_status()
     data = resp.json()
     return data.get("text") or data.get("transcript") or ""
@@ -170,11 +177,14 @@ def process_user_query(user_text: str, language: str = "en") -> str:
     """Process user query and provide relevant EB information."""
     user_text = (user_text or "").strip().lower()
     
+    # Log the transcribed text for debugging
+    print(f"[DEBUG] Language: {language}, Transcribed text: {user_text}")
+    
     if not user_text:
         return LANGUAGE_PROMPTS[language]["no_input"]
     
-    # Keywords mapping to responses
-    if any(word in user_text for word in ["bill", "payment", "dues", "बिल", "भुगतान", "బిల్", "చెల్లింపు"]):
+    # Keywords mapping to responses - Enhanced Telugu keywords
+    if any(word in user_text for word in ["bill", "payment", "dues", "pay", "बिल", "भुगतान", "బిల్", "బిల్లు", "చెల్లింపు", "చెల్లించ"]):
         if language == "hi":
             return f"बिल भुगतान और पूछताछ के लिए, कृपया हमारे ग्राहक सेवा {HYDERABAD_EB_INFO['customer_care']} पर संपर्क करें या {HYDERABAD_EB_INFO['website']} पर जाएं। आप हमारी वेबसाइट पर ऑनलाइन भुगतान विकल्प भी उपयोग कर सकते हैं।"
         elif language == "te":
@@ -182,7 +192,7 @@ def process_user_query(user_text: str, language: str = "en") -> str:
         else:
             return f"For bill payment and inquiry, please contact our customer care at {HYDERABAD_EB_INFO['customer_care']} or visit {HYDERABAD_EB_INFO['website']}. You can also use online payment options available on our website."
     
-    elif any(word in user_text for word in ["connection", "new", "apply", "कनेक्शन", "नया", "కనెక్షన్", "కొత్త"]):
+    elif any(word in user_text for word in ["connection", "new", "apply", "कनेक्शन", "नया", "आवेदन", "కనెక్షన్", "కొత్త", "దరఖాస్తు", "విద్యుత్"]):
         if language == "hi":
             return f"नए बिजली कनेक्शन के लिए आवेदन करने के लिए, हमारे कार्यालय में जाएं या {HYDERABAD_EB_INFO['toll_free']} पर कॉल करें। आपको पता प्रमाण, पहचान प्रमाण और संपत्ति दस्तावेज प्रदान करने होंगे।"
         elif language == "te":
@@ -190,7 +200,7 @@ def process_user_query(user_text: str, language: str = "en") -> str:
         else:
             return f"To apply for a new electricity connection, visit our office or call {HYDERABAD_EB_INFO['toll_free']}. You will need to provide address proof, identity proof, and property documents."
     
-    elif any(word in user_text for word in ["solar", "rooftop", "renewable", "सौर", "छत", "సౌర", "పైకప్పు"]):
+    elif any(word in user_text for word in ["solar", "rooftop", "renewable", "सौर", "छत", "సౌర", "సోలార్", "పైకప్పు"]):
         if language == "hi":
             return f"हम छत पर सौर प्रतिष्ठानों के लिए नेट मीटरिंग प्रदान करते हैं। यह आपको अपनी बिजली उत्पन्न करने और अधिशेष बिजली को ग्रिड में बेचने की अनुमति देता है। नेट मीटरिंग के लिए आवेदन करने के लिए {HYDERABAD_EB_INFO['customer_care']} पर कॉल करें।"
         elif language == "te":
@@ -198,13 +208,21 @@ def process_user_query(user_text: str, language: str = "en") -> str:
         else:
             return f"We offer net metering for rooftop solar installations. This allows you to generate your own electricity and sell surplus power to the grid. Call {HYDERABAD_EB_INFO['customer_care']} to apply for net metering."
     
-    elif any(word in user_text for word in ["complaint", "grievance", "issue", "problem", "शिकायत", "समस्या", "ఫిర్యాదు", "సమస్య"]):
+    elif any(word in user_text for word in ["complaint", "grievance", "issue", "problem", "शिकायत", "समस्या", "ఫిర్యాదు", "ఫిర్యాదులు", "సమస్య", "సమస్యలు"]):
         if language == "hi":
             return f"आप {HYDERABAD_EB_INFO['toll_free']} पर कॉल करके या {HYDERABAD_EB_INFO['website']} पर जाकर शिकायत दर्ज कर सकते हैं। हम 7 दिनों के भीतर समस्याओं को हल करने का लक्ष्य रखते हैं।"
         elif language == "te":
             return f"మీరు {HYDERABAD_EB_INFO['toll_free']} కు కాల్ చేయడం ద్వారా లేదా {HYDERABAD_EB_INFO['website']} ని సందర్శించడం ద్వారా ఫిర్యాదు దాఖలు చేయవచ్చు। మేము 7 రోజులలోపు సమస్యలను పరిష్కరించడానికి లక్ష్యంగా పెట్టుకున్నాము।"
         else:
             return f"You can file a complaint by calling {HYDERABAD_EB_INFO['toll_free']} or visiting {HYDERABAD_EB_INFO['website']}. We aim to resolve issues within 7 days."
+    
+    elif any(word in user_text for word in ["meter", "reading", "మీటర్", "రీడింగ్", "मीटर", "रीडिंग"]):
+        if language == "hi":
+            return f"आप हमारी वेबसाइट पर ऑनलाइन अपना मीटर रीडिंग देख सकते हैं या मीटर रीडिंग जानकारी के लिए हमें कॉल कर सकते हैं। शहर भर में स्मार्ट मीटरिंग लागू की जा रही है।"
+        elif language == "te":
+            return f"మీరు మా వెబ్‌సైట్‌లో ఆన్‌లైన్‌లో మీ మీటర్ రీడింగ్‌ను తనిఖీ చేయవచ్చు లేదా మీటర్ రీడింగ్ సమాచారం కోసం మమ్మల్ని కాల్ చేయవచ్చు। నగరం అంతటా స్మార్ట్ మీటరింగ్ అమలు చేయబడుతోంది।"
+        else:
+            return f"You can check your meter reading online on our website or call us for meter reading information. Smart metering is being rolled out across the city."
     
     else:
         if language == "hi":
@@ -301,9 +319,9 @@ def twilio_recording():
         return str(vr), 200, {"Content-Type": "application/xml"}
 
     try:
-        # Download and transcribe
+        # Download and transcribe with language code
         audio_path = download_twilio_recording(recording_url)
-        user_text = sarvam_stt(audio_path)
+        user_text = sarvam_stt(audio_path, lang_code)
 
         # Process query and generate response
         reply_text = process_user_query(user_text, language)

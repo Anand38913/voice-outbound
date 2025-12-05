@@ -1,140 +1,119 @@
 import os
-import uuid
 import base64
-import mimetypes
+import uuid
 from flask import Flask, request, jsonify, send_file
-from dotenv import load_dotenv
-import requests
 from twilio.twiml.voice_response import VoiceResponse
+from twilio.rest import Client
+import requests
 
+from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "secret")
 
-# -----------------------------
-# ENV VARS
-# -----------------------------
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
-SARVAM_TTS_URL = os.getenv("SARVAM_TTS_URL")
-SARVAM_STT_URL = os.getenv("SARVAM_STT_URL")
+TWILIO_SID = os.getenv("TWILIO_SID")
+TWILIO_AUTH = os.getenv("TWILIO_AUTH")
+TWILIO_NUMBER = os.getenv("TWILIO_NUMBER")
 
-REPLIES_DIR = "replies"
-os.makedirs(REPLIES_DIR, exist_ok=True)
+# -----------------------------------------------------
+# 1. GENERATE TELUGU TTS & RETURN WAV (PLAYABLE ON TWILIO)
+# -----------------------------------------------------
+@app.route("/tts", methods=["POST"])
+def tts():
+    data = request.json
+    text = data.get("text", "")
+    voice = data.get("voice", "sarvam-tts-te-v1")  # Telugu Native
 
-# -----------------------------
-# LANGUAGE MAP
-# -----------------------------
-LANG_MAP = {
-    "1": "en-IN",
-    "2": "hi-IN",
-    "3": "te-IN"
-}
-
-WELCOME = {
-    "en-IN": "Welcome to TGSPDCL Telangana power board. Press 1 for English, 2 for Hindi, 3 for Telugu.",
-    "hi-IN": "TGSPDCL में आपका स्वागत है। अंग्रेजी के लिए 1 दबाएं, हिंदी के लिए 2 दबाएं, तेलुगु के लिए 3 दबाएं।",
-    "te-IN": "TGSPDCL విద్యుత్ శాఖకు స్వాగతం. ఇంగ్లీష్ కోసం 1, హిందీ కోసం 2, తెలుగు కోసం 3 నొక్కండి."
-}
-
-# -----------------------------
-# FIXED SARVAM TTS (WORKING TELUGU)
-# -----------------------------
-def sarvam_tts(text: str, lang: str = "en-IN") -> str:
-    """Generate speech from Sarvam TTS and return path to MP3."""
-
-    if lang == "te-IN":
-        model = "sarvam-tts-te-v1"     # This works best for Telugu
-    elif lang == "hi-IN":
-        model = "bulbul:v2"
-    else:
-        model = "bulbul:v2"
-
-    payload = {
-        "text": text,
-        "model": model,
-        "target_language_code": lang,
-        "pitch": 0,
-        "pace": 1.0,
-        "loudness": 1.2
-    }
+    sarvam_url = "https://api.sarvam.ai/text-to-speech"
 
     headers = {
-        "Authorization": f"Bearer {SARVAM_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "API-Key": SARVAM_API_KEY
     }
 
-    r = requests.post(SARVAM_TTS_URL, json=payload, headers=headers, timeout=40)
-    r.raise_for_status()
-    data = r.json()
+    payload = {
+        "input": text,
+        "voice": voice,
+        "output_format": "wav",          # REQUIRED for Twilio
+        "sample_rate": 8000              # REQUIRED for Twilio
+    }
 
-    # Extract Base64 audio
-    audio_b64 = None
+    res = requests.post(sarvam_url, json=payload, headers=headers)
 
-    if "audios" in data:
-        audio_b64 = data["audios"][0]
+    if res.status_code != 200:
+        return jsonify({"error": res.text}), 500
 
-    if not audio_b64:
-        raise Exception("No audio returned by Sarvam")
+    audio_base64 = res.json().get("audio_base64")
+    audio_bytes = base64.b64decode(audio_base64)
 
-    # Remove data URL prefix if present
-    if audio_b64.startswith("data:"):
-        audio_b64 = audio_b64.split(",", 1)[1]
+    file_name = f"audio_{uuid.uuid4()}.wav"
+    file_path = f"/tmp/{file_name}"
 
-    audio_bytes = base64.b64decode(audio_b64)
-
-    # Always save as mp3 because Twilio supports it
-    filename = f"{uuid.uuid4().hex}.mp3"
-    filepath = os.path.join(REPLIES_DIR, filename)
-
-    with open(filepath, "wb") as f:
+    with open(file_path, "wb") as f:
         f.write(audio_bytes)
 
-    return filepath
+    return jsonify({"url": f"/audio/{file_name}"})
 
 
-# -----------------------------
-# TWILIO ENTRYPOINT
-# -----------------------------
-@app.route("/twilio/voice", methods=["POST"])
-def twilio_voice():
-    resp = VoiceResponse()
-
-    msg = WELCOME["en-IN"]
-    audio_path = sarvam_tts(msg, "en-IN")
-
-    resp.play(f"/reply/{os.path.basename(audio_path)}")
-    resp.gather(numDigits=1, action="/select-language", timeout=6)
-
-    return str(resp)
+# -----------------------------------------------------
+# 2. SERVE WAV FILES TO TWILIO
+# -----------------------------------------------------
+@app.route("/audio/<filename>")
+def serve_audio(filename):
+    return send_file(f"/tmp/{filename}", mimetype="audio/wav")
 
 
-# -----------------------------
-# LANGUAGE SELECTION
-# -----------------------------
-@app.route("/select-language", methods=["POST"])
-def select_language():
-    digit = request.values.get("Digits", "1")
-    lang = LANG_MAP.get(digit, "en-IN")
-
-    resp = VoiceResponse()
-
-    message = WELCOME[lang]
-    audio_path = sarvam_tts(message, lang)
-
-    resp.play(f"/reply/{os.path.basename(audio_path)}")
-
-    return str(resp)
+# -----------------------------------------------------
+# 3. TWILIO INBOUND CALL — PLAYS TELUGU
+# -----------------------------------------------------
+@app.route("/voice", methods=["POST"])
+def voice():
+    vr = VoiceResponse()
+    vr.play("https://your-render-domain.onrender.com/audio/sample.wav")
+    return str(vr)
 
 
-# -----------------------------
-# FILE SERVING FOR TWILIO
-# -----------------------------
-@app.route("/reply/<filename>")
-def reply_file(filename):
-    return send_file(os.path.join(REPLIES_DIR, filename), mimetype="audio/mpeg")
+# -----------------------------------------------------
+# 4. MAKE A TEST OUTGOING CALL FROM RENDER
+# -----------------------------------------------------
+@app.route("/call", methods=["GET"])
+def make_call():
+    to_number = request.args.get("to")
+
+    client = Client(TWILIO_SID, TWILIO_AUTH)
+
+    call = client.calls.create(
+        to=to_number,
+        from_=TWILIO_NUMBER,
+        url="https://your-render-domain.onrender.com/outbound-xml"
+    )
+
+    return jsonify({"status": "call started", "sid": call.sid})
+
+
+# -----------------------------------------------------
+# 5. XML FOR OUTBOUND CALL
+# -----------------------------------------------------
+@app.route("/outbound-xml", methods=["POST"])
+def outbound_xml():
+    text = "నమస్కారం. ఇది ఒక పరీక్ష కాల్. ట్విలియో ద్వారా తెలుగు మాట్లాడుతున్నాం."
+
+    # Request TTS
+    wav = requests.post(
+        "https://your-render-domain.onrender.com/tts",
+        json={"text": text}
+    ).json()["url"]
+
+    vr = VoiceResponse()
+    vr.play(f"https://your-render-domain.onrender.com{wav}")
+    return str(vr)
 
 
 @app.route("/")
 def home():
-    return "TGSPDCL IVR is Running on Render", 200
+    return "Sarvam + Twilio Voice Bot Running"
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)

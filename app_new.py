@@ -149,7 +149,7 @@ def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
         model = "bulbul:v1"
         speaker = ""
     elif language_code == "te-IN":
-        model = "bulbul:v2"
+        model = "sarvam-tts-te-v1"
         speaker = ""
     else:
         model = "bulbul:v1"

@@ -1,5 +1,7 @@
 import os
 import uuid
+import base64
+import mimetypes
 from typing import Optional
 from flask import Flask, request, jsonify, send_file, session
 from dotenv import load_dotenv
@@ -123,7 +125,6 @@ def sarvam_stt(audio_path: str, language_code: str = "en-IN") -> str:
 
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
     
-    # Prepare the request with language code
     data_payload = {
         "language_code": language_code,
         "model": "saaras:v1"
@@ -138,13 +139,10 @@ def sarvam_stt(audio_path: str, language_code: str = "en-IN") -> str:
 
 
 def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
-    """Send text to Sarvam TTS and return path to generated audio file (wav/mp3).
-       This version is defensive: inspects response and chooses correct extension.
-    """
+    """Send text to Sarvam TTS and return path to generated audio file."""
     if not (SARVAM_API_KEY and SARVAM_TTS_URL):
         raise RuntimeError("Sarvam TTS not configured (SARVAM_API_KEY/SARVAM_TTS_URL)")
 
-    # model selection (your mapping)
     if language_code == "hi-IN":
         model = "bulbul:v1"
         speaker = ""
@@ -155,7 +153,7 @@ def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
         model = "bulbul:v1"
         speaker = ""
 
-    print(f"[DEBUG] TTS request - lang: {language_code}, model: {model}, speaker: {speaker}, text_len={len(text)}")
+    print(f"[DEBUG] TTS request - lang: {language_code}, model: {model}, text_len={len(text)}")
 
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -173,42 +171,33 @@ def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
     resp = None
     try:
         resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, timeout=60)
-        # Always log status and body for debugging
         print(f"[DEBUG] Sarvam TTS status: {resp.status_code}")
-        print(f"[DEBUG] Sarvam TTS body: {resp.text[:2000]}")  # truncate to avoid huge logs
+        print(f"[DEBUG] Sarvam TTS body: {resp.text[:2000]}")
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        # provide richer log for debugging
         if resp is not None:
             print("[ERROR] Sarvam TTS failed:", resp.status_code, resp.text)
         raise
 
-    # Try several common shapes:
     audio_b64 = None
     audio_mime = None
 
-    # Case A: audios is list of base64 strings or data URIs
     audios = data.get("audios")
     if audios:
         first = audios[0]
         if isinstance(first, dict):
-            # maybe {"audio": "...", "mime": "audio/wav"}
             audio_b64 = first.get("audio") or first.get("data") or first.get("base64")
             audio_mime = first.get("mime") or first.get("format")
         elif isinstance(first, str):
-            # maybe "data:audio/wav;base64,AAA..."
             if first.startswith("data:"):
-                # parse data URI
                 header, b64 = first.split(",", 1)
                 audio_b64 = b64
-                # header example: data:audio/wav;base64
                 if ";" in header:
                     audio_mime = header.split(":")[1].split(";")[0]
             else:
                 audio_b64 = first
 
-    # Case B: direct key 'audio' or 'audio_base64'
     if not audio_b64:
         for k in ("audio", "audio_base64", "base64_audio", "file"):
             if k in data:
@@ -220,13 +209,11 @@ def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
         print(data)
         raise RuntimeError("No audio returned from TTS")
 
-    # Determine extension
     ext = ".wav"
     if audio_mime:
         ext = mimetypes.guess_extension(audio_mime) or ext
-    # If extension still None and base64 begins with MP3 magic after decode, fallback to .mp3
+    
     audio_bytes = base64.b64decode(audio_b64)
-    # Quick magic-byte detection:
     if audio_bytes[:3] == b"ID3" or audio_bytes[:2] == b"\xff\xfb":
         ext = ".mp3"
     elif audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
@@ -241,18 +228,15 @@ def sarvam_tts(text: str, language_code: str = "en-IN") -> str:
     return path
 
 
-
 def process_user_query(user_text: str, language: str = "en") -> str:
     """Process user query and provide relevant EB information."""
     user_text = (user_text or "").strip().lower()
     
-    # Log the transcribed text for debugging
     print(f"[DEBUG] Language: {language}, Transcribed text: {user_text}")
     
     if not user_text:
         return LANGUAGE_PROMPTS[language]["no_input"]
     
-    # Keywords mapping to responses - Enhanced Telugu keywords
     if any(word in user_text for word in ["bill", "payment", "dues", "pay", "बिल", "भुगतान", "బిల్", "బిల్లు", "చెల్లింపు", "చెల్లించ"]):
         if language == "hi":
             return f"बिल भुगतान और पूछताछ के लिए, कृपया हमारे ग्राहक सेवा {HYDERABAD_EB_INFO['customer_care']} पर संपर्क करें या {HYDERABAD_EB_INFO['website']} पर जाएं। आप हमारी वेबसाइट पर ऑनलाइन भुगतान विकल्प भी उपयोग कर सकते हैं।"
@@ -319,32 +303,23 @@ def initiate_call():
     return jsonify({"sid": call.sid, "status": call.status, "message": f"Calling {YOUR_PHONE_NUMBER}"}), 201
 
 
-# @app.route("/twilio/voice", methods=["GET", "POST"])
 @app.route("/twilio/voice", methods=["GET", "POST"])
 def twilio_voice():
     """Initial TwiML: Ask for language selection."""
     call_sid = request.values.get("CallSid")
     vr = VoiceResponse()
     
-    # Initialize call state
     call_states[call_sid] = {"language": None, "interaction_count": 0}
     
-    # Ask for language selection
     gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/language", method="POST", timeout=5)
-    # use say() here — Twilio will TTS English prompt
     gather.say(LANGUAGE_PROMPTS["en"]["welcome"], language="en-IN")
     vr.append(gather)
     
-    # If no input, repeat
     vr.redirect(f"{BASE_URL}/twilio/voice")
     
     return str(vr), 200, {"Content-Type": "application/xml"}
 
 
-
-# @app.route("/twilio/language", methods=["POST"])
-# def twilio_language():
-#     """Handle language selection."""
 @app.route("/twilio/language", methods=["POST"])
 def twilio_language():
     """Handle language selection."""
@@ -353,11 +328,9 @@ def twilio_language():
     
     vr = VoiceResponse()
     
-    # Map digit to language
     language_map = {"1": "en", "2": "hi", "3": "te"}
     language = language_map.get(digits, "en")
     
-    # Update call state
     if call_sid in call_states:
         call_states[call_sid]["language"] = language
     else:
@@ -365,29 +338,32 @@ def twilio_language():
     
     print(f"[DEBUG] Language selected: {language} for call {call_sid}")
     
-    # Greet in selected language and ask for query
     lang_code = LANGUAGES[language]["code"]
 
-    # If Telugu (unsupported by Twilio Say), generate TTS via Sarvam and Play it
-    if language == "te":
-        # generate audio file for greeting
+    try:
+        # ALWAYS use Sarvam TTS for greeting, regardless of language
         greeting_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["greeting"], lang_code)
         greeting_url = f"{BASE_URL}/replies/{os.path.basename(greeting_audio)}"
         vr.play(greeting_url)
-    else:
-        # Use Twilio Say for supported languages (English/Hindi)
-        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+    except Exception as e:
+        print(f"[ERROR] Failed to generate greeting TTS: {e}")
+        # Fallback to Twilio say for English/Hindi only
+        if language in ["en", "hi"]:
+            vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+        else:
+            vr.say("Sorry, there was an error. Please try again.", language="en-IN")
     
-    # Record user's query
     vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
     
-    # No input message — use say() not play()
-    vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+    # For no input, use Twilio say for supported languages
+    if language in ["en", "hi"]:
+        vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+    else:
+        vr.say("I did not receive your input. Please try again.", language="en-IN")
+    
     vr.redirect(f"{BASE_URL}/twilio/continue")
     
     return str(vr), 200, {"Content-Type": "application/xml"}
-
-
 
 
 @app.route("/twilio/recording", methods=["POST"])
@@ -396,7 +372,6 @@ def twilio_recording():
     call_sid = request.values.get("CallSid")
     recording_url = request.form.get("RecordingUrl") or request.values.get("RecordingUrl")
     
-    # Get call state
     call_state = call_states.get(call_sid, {"language": "en", "interaction_count": 0})
     language = call_state["language"]
     lang_code = LANGUAGES[language]["code"]
@@ -404,38 +379,49 @@ def twilio_recording():
     vr = VoiceResponse()
     
     if not recording_url:
-        vr.play(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+        # Use Sarvam TTS for no_input message
+        try:
+            no_input_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["no_input"], lang_code)
+            no_input_url = f"{BASE_URL}/replies/{os.path.basename(no_input_audio)}"
+            vr.play(no_input_url)
+        except:
+            if language in ["en", "hi"]:
+                vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+            else:
+                vr.say("I did not receive your input.", language="en-IN")
+        
         vr.redirect(f"{BASE_URL}/twilio/continue")
         return str(vr), 200, {"Content-Type": "application/xml"}
 
     try:
-        # Download and transcribe with language code
         audio_path = download_twilio_recording(recording_url)
         user_text = sarvam_stt(audio_path, lang_code)
-
-        # Process query and generate response
         reply_text = process_user_query(user_text, language)
-
-        # Generate audio response
         reply_audio_path = sarvam_tts(reply_text, lang_code)
         filename = os.path.basename(reply_audio_path)
         audio_url = f"{BASE_URL}/replies/{filename}"
 
-        # Play response
         vr.play(audio_url)
         
-        # Update interaction count
         call_state["interaction_count"] += 1
         call_states[call_sid] = call_state
         
-        # Ask if user wants to continue
         vr.redirect(f"{BASE_URL}/twilio/continue")
         
         return str(vr), 200, {"Content-Type": "application/xml"}
 
     except Exception as e:
         print(f"Error: {str(e)}")
-        vr.play(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+        try:
+            error_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["no_input"], lang_code)
+            error_url = f"{BASE_URL}/replies/{os.path.basename(error_audio)}"
+            vr.play(error_url)
+        except:
+            if language in ["en", "hi"]:
+                vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+            else:
+                vr.say("Sorry, there was an error.", language="en-IN")
+        
         vr.redirect(f"{BASE_URL}/twilio/continue")
         return str(vr), 200, {"Content-Type": "application/xml"}
 
@@ -449,68 +435,3 @@ def twilio_continue():
     lang_code = LANGUAGES[language]["code"]
     
     vr = VoiceResponse()
-    
-    # Ask for next action
-    gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/action", method="POST", timeout=5)
-    gather.say(LANGUAGE_PROMPTS[language]["ask_more"], language=lang_code)
-    vr.append(gather)
-    
-    # If no input, end call
-    vr.play(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
-    
-    vr.hangup()
-    
-    return str(vr), 200, {"Content-Type": "application/xml"}
-
-
-@app.route("/twilio/action", methods=["POST"])
-def twilio_action():
-    """Handle user's choice to continue, change language, or end call."""
-    call_sid = request.values.get("CallSid")
-    digits = request.values.get("Digits")
-    call_state = call_states.get(call_sid, {"language": "en", "interaction_count": 0})
-    language = call_state["language"]
-    lang_code = LANGUAGES[language]["code"]
-    
-    vr = VoiceResponse()
-    
-    if digits == "1":
-        # Continue with another question
-        vr.play(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
-        vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
-        vr.redirect(f"{BASE_URL}/twilio/continue")
-    
-    elif digits == "2":
-        # Change language
-        gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/language", method="POST", timeout=5)
-        gather.play(LANGUAGE_PROMPTS[language]["change_language"], language=lang_code)
-        vr.append(gather)
-        vr.redirect(f"{BASE_URL}/twilio/continue")
-    
-    elif digits == "3":
-        # End call
-        vr.play(LANGUAGE_PROMPTS[language]["goodbye"], language=lang_code)
-        vr.hangup()
-        # Clean up call state
-        if call_sid in call_states:
-            del call_states[call_sid]
-    
-    else:
-        # Invalid input, ask again
-        vr.redirect(f"{BASE_URL}/twilio/continue")
-    
-    return str(vr), 200, {"Content-Type": "application/xml"}
-
-
-@app.route("/replies/<path:filename>")
-def serve_reply(filename: str):
-    """Serve generated audio files."""
-    path = os.path.join(REPLIES_DIR, filename)
-    if not os.path.exists(path):
-        return ("Not found", 404)
-    return send_file(path, conditional=True)
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)

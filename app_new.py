@@ -575,4 +575,4 @@ def twilio_action():
         print(f"[ACTION] User chose to end call")
         try:
             goodbye_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["goodbye"], lang_code)
-            goodbye_url = f"{BASE_URL}/replies/{os.path.basename
+            goodbye_url = f"{BASE_URL}/replies/{os.path.basename}}

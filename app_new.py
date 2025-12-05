@@ -319,6 +319,7 @@ def initiate_call():
     return jsonify({"sid": call.sid, "status": call.status, "message": f"Calling {YOUR_PHONE_NUMBER}"}), 201
 
 
+# @app.route("/twilio/voice", methods=["GET", "POST"])
 @app.route("/twilio/voice", methods=["GET", "POST"])
 def twilio_voice():
     """Initial TwiML: Ask for language selection."""
@@ -330,6 +331,7 @@ def twilio_voice():
     
     # Ask for language selection
     gather = Gather(num_digits=1, action=f"{BASE_URL}/twilio/language", method="POST", timeout=5)
+    # use say() here — Twilio will TTS English prompt
     gather.say(LANGUAGE_PROMPTS["en"]["welcome"], language="en-IN")
     vr.append(gather)
     
@@ -339,6 +341,10 @@ def twilio_voice():
     return str(vr), 200, {"Content-Type": "application/xml"}
 
 
+
+# @app.route("/twilio/language", methods=["POST"])
+# def twilio_language():
+#     """Handle language selection."""
 @app.route("/twilio/language", methods=["POST"])
 def twilio_language():
     """Handle language selection."""
@@ -362,7 +368,7 @@ def twilio_language():
     # Greet in selected language and ask for query
     lang_code = LANGUAGES[language]["code"]
 
-    # If Telugu (or other unsupported by Twilio Say), generate TTS via Sarvam and Play it
+    # If Telugu (unsupported by Twilio Say), generate TTS via Sarvam and Play it
     if language == "te":
         # generate audio file for greeting
         greeting_audio = sarvam_tts(LANGUAGE_PROMPTS[language]["greeting"], lang_code)
@@ -370,16 +376,17 @@ def twilio_language():
         vr.play(greeting_url)
     else:
         # Use Twilio Say for supported languages (English/Hindi)
-        vr.play(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
+        vr.say(LANGUAGE_PROMPTS[language]["greeting"], language=lang_code)
     
     # Record user's query
     vr.record(action=f"{BASE_URL}/twilio/recording", method="POST", max_length=60, play_beep=True, timeout=5)
     
-    # No input message
-    vr.play(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
+    # No input message — use say() not play()
+    vr.say(LANGUAGE_PROMPTS[language]["no_input"], language=lang_code)
     vr.redirect(f"{BASE_URL}/twilio/continue")
     
     return str(vr), 200, {"Content-Type": "application/xml"}
+
 
 
 
